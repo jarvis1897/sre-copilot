@@ -1,0 +1,2 @@
+# Normalize line endings to LF everywhere; the dev host is Linux (ADR 0001).
+* text=auto eol=lf
