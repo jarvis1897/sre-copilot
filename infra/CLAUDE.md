@@ -7,3 +7,5 @@ Pin every chart and image version. Conventions specific to this folder will be a
 - The cluster is defined in `kind-config.yaml` (1 control-plane + 2 workers). The node image is pinned by digest; when bumping it, bump `KIND_VERSION` in the root Makefile to the kind release that built it.
 - All pinned versions (kind, charts) live in `versions.env`, included by the root Makefile. Bump them deliberately.
 - Chart overrides go in `values/<release>.yaml`, never in `--set` flags. The demo runs in namespace `otel-demo`; its UIs are behind `svc/frontend-proxy` on port 8080.
+- Telemetry: the demo chart's bundled Prometheus, Jaeger, and Grafana stay; OpenSearch is off. Logs go collector → OTLP/HTTP → Loki (`grafana/loki`, single-binary) in namespace `observability` ([ADR 0003](../docs/adr/0003-logs-in-loki.md)).
+- Before changing the collector config, render it with `helm template` and run `otelcol-contrib validate` on it: a bad exporter config stops all telemetry.

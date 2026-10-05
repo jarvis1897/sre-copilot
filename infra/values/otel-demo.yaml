@@ -1,14 +1,42 @@
 # Overrides for the open-telemetry/opentelemetry-demo chart (version in infra/versions.env).
 # Keep customizations here rather than in --set flags.
 
-# The chart's bundled telemetry backends stay on until our own M0 stack (Prometheus, Loki,
-# Tempo/Jaeger, Grafana, Alertmanager) is deployed; then flip these to false and point the
-# collector's exporters at our stack. Listed explicitly so the switch is a one-line change.
-jaeger:
-  enabled: true
-prometheus:
-  enabled: true
-grafana:
-  enabled: true
+# Bundled backends we keep: Prometheus (metrics), Jaeger (traces), Grafana.
+# Logs go to our own Loki (infra/values/loki.yaml, namespace observability) instead of OpenSearch.
 opensearch:
-  enabled: true
+  enabled: false
+
+opentelemetry-collector:
+  config:
+    exporters:
+      # The chart's default `opensearch` exporter stays defined but is in no pipeline, so it never
+      # runs. Don't set it to null: the subchart keeps the key and the collector fails validation.
+      otlp_http/loki:
+        endpoint: http://loki.observability.svc.cluster.local:3100/otlp
+        tls:
+          insecure: true
+    service:
+      pipelines:
+        logs:
+          # Lists replace the chart's default; processors are inherited unchanged.
+          exporters: [otlp_http/loki, debug]
+
+grafana:
+  datasources:
+    loki.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Loki
+          uid: webstore-loki
+          type: loki
+          url: http://loki.observability.svc.cluster.local:3100
+          editable: true
+          jsonData:
+            derivedFields:
+              # trace_id is OTLP structured metadata; link each log line to its trace.
+              - name: trace_id
+                matcherType: label
+                matcherRegex: trace_id
+                datasourceUid: webstore-traces
+                url: "$${__value.raw}"
+                urlDisplayLabel: View trace

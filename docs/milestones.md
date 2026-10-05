@@ -6,7 +6,7 @@ Update this table as work lands. Status values: `Not started`, `In progress`, `D
 
 | Milestone | Title | Status | Notes |
 |---|---|---|---|
-| M0 | Environment and Telemetry | In progress | kind cluster + OTel demo chart via `make up`; own telemetry stack next |
+| M0 | Environment and Telemetry | In progress | kind cluster, OTel demo, Loki for logs (ADR 0003); Alertmanager + rules next |
 | M1 | Fault Injection Harness and Labeled Dataset | Not started | |
 | M2 | MCP Tool Servers | Not started | |
 | M3 | Single-Agent Baseline and Eval Runner | Not started | |

@@ -7,6 +7,8 @@ KUBE_CONTEXT   := kind-$(CLUSTER_NAME)
 KIND_CONFIG    := infra/kind-config.yaml
 OTEL_DEMO_NS   := otel-demo
 OTEL_DEMO_REPO := https://open-telemetry.github.io/opentelemetry-helm-charts
+OBS_NS         := observability
+GRAFANA_REPO   := https://grafana.github.io/helm-charts
 
 help: ## List available targets
 	@echo "Targets:"
@@ -28,11 +30,15 @@ up:
 	fi
 	@# kind's --wait only covers the control-plane; wait for the workers too.
 	@kubectl --context $(KUBE_CONTEXT) wait --for=condition=Ready nodes --all --timeout=120s
+	helm upgrade --install loki loki --repo $(GRAFANA_REPO) \
+		--version $(LOKI_CHART_VERSION) --kube-context $(KUBE_CONTEXT) \
+		--namespace $(OBS_NS) --create-namespace \
+		--values infra/values/loki.yaml --wait --timeout 10m
 	helm upgrade --install otel-demo opentelemetry-demo --repo $(OTEL_DEMO_REPO) \
 		--version $(OTEL_DEMO_CHART_VERSION) --kube-context $(KUBE_CONTEXT) \
 		--namespace $(OTEL_DEMO_NS) --create-namespace \
 		--values infra/values/otel-demo.yaml --wait --timeout 15m
-	@# TODO(M0): install our own telemetry stack and alert rules.
+	@# TODO(M0): Alertmanager and alert rules.
 
 # Delete the cluster and everything in it.
 down:
