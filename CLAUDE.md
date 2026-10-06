@@ -29,13 +29,14 @@ docs/         problem statement, architecture, milestones, ADRs
 Development happens on a Linux VM in GCP, not on the laptop. Everything (code, Docker, the kind/k3d cluster, `make`) runs on the VM, and the editor connects over VS Code Remote-SSH. See [docs/dev-environment.md](docs/dev-environment.md) for setup and [ADR 0001](docs/adr/0001-dev-environment.md) for the reasoning. All commands below run on the VM.
 
 ```
-make up       # bring up cluster + demo app + telemetry
+./infra/bootstrap.sh   # once per host: pinned Docker, make, kind, kubectl, Helm + inotify limits
+make up       # bring up cluster + demo app + telemetry (idempotent)
+make status   # health gate: exits non-zero if anything is unhealthy (--json via infra/status.py)
+make smoke    # real fault end to end: alert fires, logs + traces show it, alert resolves
 make down     # tear it all down
-make status   # health of cluster, pods, telemetry
-make smoke    # trigger a test alert and confirm it fires
 ```
 
-These are placeholders until M0 is done. The cluster stays cloud-agnostic: no GCP-specific services in `infra/`, so `make up` works on any Linux host with Docker.
+The cluster stays cloud-agnostic: no GCP-specific services in `infra/`, so `make up` works on any Linux host with Docker.
 
 ## Conventions
 

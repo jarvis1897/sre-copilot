@@ -6,8 +6,96 @@
 opensearch:
   enabled: false
 
+components:
+  # The chart hard-codes `busybox:latest` / `busybox` in these init containers. Lists replace
+  # the chart default, so each list is restated verbatim from chart 0.42.2 with busybox pinned
+  # (1.37, index digest). Re-check these when bumping OTEL_DEMO_CHART_VERSION.
+  accounting:
+    initContainers:
+    - name: wait-for-kafka
+      image: busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+      command:
+      - sh
+      - -c
+      - until nc -z -v -w30 kafka 9092; do echo waiting for kafka; sleep 2; done;
+  cart:
+    initContainers:
+    - name: wait-for-valkey-cart
+      image: busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+      command:
+      - sh
+      - -c
+      - until nc -z -v -w30 valkey-cart 6379; do echo waiting for valkey-cart; sleep 2; done;
+  checkout:
+    initContainers:
+    - name: wait-for-kafka
+      image: busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+      command:
+      - sh
+      - -c
+      - until nc -z -v -w30 kafka 9092; do echo waiting for kafka; sleep 2; done;
+  flagd:
+    initContainers:
+    - name: init-config
+      image: busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+      command:
+      - sh
+      - -c
+      - cp /config-ro/demo.flagd.json /config-rw/demo.flagd.json && cat /config-rw/demo.flagd.json
+      volumeMounts:
+      - mountPath: /config-ro
+        name: config-ro
+      - mountPath: /config-rw
+        name: config-rw
+  fraud-detection:
+    initContainers:
+    - name: wait-for-kafka
+      image: busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+      command:
+      - sh
+      - -c
+      - until nc -z -v -w30 kafka 9092; do echo waiting for kafka; sleep 2; done;
+  product-catalog:
+    initContainers:
+    - name: wait-for-astronomy-db
+      image: busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+      command:
+      - sh
+      - -c
+      - until nc -z -v -w30 astronomy-db 5432; do echo waiting for astronomy-db; sleep 2; done;
+  shipping:
+    initContainers:
+    - name: wait-for-flagd
+      image: busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+      command:
+      - sh
+      - -c
+      - until nc -z -v -w30 flagd 8013; do echo waiting for flagd; sleep 2; done;
+  ad:
+    # Chart default is 300Mi; the JVM plus the OTel Java agent peaked at the limit and was
+    # OOMKilled repeatedly (8 restarts by 2026-10-06), causing /api/data 500s. 512Mi leaves headroom.
+    resources:
+      limits:
+        memory: 512Mi
+
 opentelemetry-collector:
   config:
+    connectors:
+      # Attach trace_id exemplars to span metrics, so a latency/error metric links to concrete
+      # traces (Prometheus already runs with exemplar storage, Grafana already links them to Jaeger).
+      span_metrics:
+        exemplars:
+          enabled: true
+    processors:
+      # The frontend proxy (Envoy) names every server span just "POST"/"GET", so browser flag
+      # streams it proxies (/flagservice/...EventStream, long-lived by design) are indistinguishable
+      # from real requests and inflate its p99. Name them so the latency rule can exclude them.
+      transform/label_streams:
+        error_mode: ignore
+        trace_statements:
+          - context: span
+            statements:
+              - set(name, "POST /flagservice EventStream") where resource.attributes["service.name"] == "frontend-proxy" and IsMatch(attributes["http.url"], "/flagservice/.*EventStream")
     exporters:
       # The chart's default `opensearch` exporter stays defined but is in no pipeline, so it never
       # runs. Don't set it to null: the subchart keeps the key and the collector fails validation.
@@ -17,6 +105,10 @@ opentelemetry-collector:
           insecure: true
     service:
       pipelines:
+        traces:
+          # Restated in full (lists replace the chart default) to add transform/label_streams
+          # before span metrics are computed. k8s_attributes is prepended by the chart's preset.
+          processors: [memory_limiter, resource_detection, resource, transform/sanitize_spans, gen_ai_normalizer, transform/label_streams, transform/redact_sensitive_data, redaction]
         logs:
           # Lists replace the chart's default; processors are inherited unchanged.
           exporters: [otlp_http/loki, debug]
@@ -40,3 +132,92 @@ grafana:
                 datasourceUid: webstore-traces
                 url: "$${__value.raw}"
                 urlDisplayLabel: View trace
+
+prometheus:
+  # Reload rules/config on change instead of needing a pod restart. The reloader calls
+  # /-/reload, which needs --web.enable-lifecycle. Lists replace the chart's default, so the
+  # demo chart's two flags are restated here.
+  configmapReload:
+    prometheus:
+      enabled: true
+  server:
+    extraFlags:
+      - "enable-feature=exemplar-storage"
+      - "web.enable-otlp-receiver"
+      - "web.enable-lifecycle"
+  # Restart and CrashLoopBackOff signals for PodRestartingOrCrashLooping.
+  kube-state-metrics:
+    enabled: true
+  # Prometheus discovers this Alertmanager automatically (pod SD in this namespace).
+  alertmanager:
+    enabled: true
+    config:
+      global: {}
+      route:
+        receiver: webhook-logger
+        group_by: [alertname, service_name, namespace, pod]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+      receivers:
+        - name: webhook-logger
+          webhook_configs:
+            # infra/manifests/alert-webhook.yaml; stand-in for the copilot's alert intake.
+            - url: http://alert-webhook.observability.svc.cluster.local:8080/alerts
+              send_resolved: true
+  serverFiles:
+    alerting_rules.yml:
+      groups:
+        - name: sre-copilot-m0
+          rules:
+            # Error ratio of server spans per service, from the collector's span metrics. The traffic
+            # guard (>= 3 requests in 5m) skips idle services but keeps low-volume ones like payment
+            # and checkout (~0.04 req/s).
+            - alert: ServiceHighErrorRate
+              expr: |
+                (
+                  sum by (service_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}[5m]))
+                /
+                  sum by (service_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m]))
+                ) > 0.05
+                and
+                sum by (service_name) (rate(traces_span_metrics_calls_total{span_kind="SPAN_KIND_SERVER"}[5m])) > 0.01
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "{{ $labels.service_name }}: {{ $value | humanizePercentage }} of server requests failing"
+                description: "More than 5% of server spans for {{ $labels.service_name }} ended with STATUS_CODE_ERROR over the last 5m (min 0.01 req/s)."
+                runbook: ""
+            # Threshold from the 2026-10-06 baseline: steady-state p99 <= ~100ms for every service
+            # except `agent` (LLM-backed, 0.4-15s by design), which is excluded. 500ms leaves room
+            # for low-traffic noise and still catches the demo's 5-10s slowdown faults.
+            # Long-lived streaming RPCs (flagd EventStream/SyncFlags, including the browser streams the
+            # frontend proxy carries, see transform/label_streams) are excluded: their span lasts as
+            # long as the stream, so they would otherwise look like latency spikes.
+            - alert: ServiceHighLatencyP99
+              expr: |
+                histogram_quantile(0.99,
+                  sum by (service_name, le) (rate(traces_span_metrics_duration_milliseconds_bucket{span_kind="SPAN_KIND_SERVER", service_name!="agent", span_name!~".*(EventStream|SyncFlags).*"}[5m]))
+                ) > 500
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "{{ $labels.service_name }}: p99 server latency {{ $value | humanize }}ms"
+                description: "p99 latency of server spans for {{ $labels.service_name }} has been above 500ms for 5m (baseline <= ~100ms)."
+                runbook: ""
+            - alert: PodRestartingOrCrashLooping
+              # Both sides aggregate to the same labels so a crash-looping pod is one alert, not two
+              # that fire and resolve independently.
+              expr: |
+                max by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total[10m])) > 0
+                or
+                max by (namespace, pod, container) (kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}) == 1
+              for: 1m
+              labels:
+                severity: warning
+              annotations:
+                summary: "{{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) is restarting"
+                description: "Container {{ $labels.container }} in pod {{ $labels.namespace }}/{{ $labels.pod }} restarted in the last 10m or is in CrashLoopBackOff."
+                runbook: ""

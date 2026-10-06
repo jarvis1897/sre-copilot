@@ -37,7 +37,19 @@ This writes an entry to `~/.ssh/config` named `$VM.$ZONE.$PROJECT`. In VS Code, 
 
 ## 3. Tooling on the VM
 
-You need Docker, kind or k3d, Helm, kubectl, `make` and Python. Install them at pinned versions. A bootstrap script for this comes with M0 (`infra/`).
+From the repo root on the VM:
+
+```bash
+./infra/bootstrap.sh
+```
+
+It installs Docker, make, kind, kubectl and Helm at the versions pinned in `infra/versions.env`, verifying each download against its published checksum. It holds the apt packages so unattended upgrades can't move them off the pin. Re-running it is safe; anything already at the pinned version is left alone. If it adds you to the `docker` group, log out and back in before `make up`.
+
+It also raises the inotify limits. kind runs several Kubernetes nodes on one host, and the Ubuntu defaults run out: kube-proxy then crash-loops with `too many open files` and pods on that node can't reach Services ([kind known issue](https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files)). The settings live in `/etc/sysctl.d/99-kind-inotify.conf`, so they survive VM restarts, and `make up` warns if they're too low.
+
+Don't run `sysctl --system` on this VM. The GCE image's `60-gce-network-security.conf` sets `net.ipv4.ip_forward=0`, which overrides the value Docker sets at startup and cuts the kind nodes off from the internet (image pulls time out). If that happens, `sudo sysctl -w net.ipv4.ip_forward=1` restores it, and so does re-running the bootstrap script.
+
+If the script reports that a pinned apt version is gone from the archive, Ubuntu has shipped an update. Pick the new version from `apt-cache madison <pkg>` and bump it in `infra/versions.env`.
 
 ## 4. Reaching UIs
 
